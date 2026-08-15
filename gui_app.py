@@ -568,10 +568,18 @@ class HospitalKMSApp:
         tv_frame = tk.Frame(frame, bg=BG_DARK)
         tv_frame.pack(fill="both", expand=True, padx=20, pady=(0, 12))
 
-        cols = ("severity", "service", "rule_name", "week", "detail")
+        cols = ("severity", "confidence", "service", "rule_name", "week", "action_plan", "detail")
         self._es_tree = ttk.Treeview(tv_frame, columns=cols, show="headings", height=20)
 
-        widths = {"severity": 95, "service": 130, "rule_name": 220, "week": 65, "detail": 380}
+        widths = {
+            "severity": 90,
+            "confidence": 85,
+            "service": 120,
+            "rule_name": 180,
+            "week": 60,
+            "action_plan": 340,
+            "detail": 280,
+        }
         for c in cols:
             self._es_tree.heading(c, text=c.replace("_", " ").title())
             self._es_tree.column(c, width=widths.get(c, 120), anchor="center")
@@ -640,17 +648,22 @@ class HospitalKMSApp:
             if dept_filter != "All" and r["service"] != dept_filter:
                 continue
             if query:
-                combined = f"{r['service']} {r['rule_name']} {r['conclusion']} {r.get('detail','')}".lower()
+                combined = f"{r['service']} {r['rule_name']} {r['conclusion']} {r.get('detail','')} {r.get('action_plan','')}".lower()
                 if query not in combined:
                     continue
+
+            conf_val = r.get("confidence", 1.0)
+            conf_str = f"{conf_val:.0%}" if isinstance(conf_val, (int, float)) else str(conf_val)
 
             self._es_tree.insert(
                 "", "end",
                 values=(
                     r["severity"],
+                    conf_str,
                     r["service"],
                     r["rule_name"],
                     r.get("week", "—"),
+                    r.get("action_plan", ""),
                     r.get("detail", ""),
                 ),
                 tags=(r["severity"],),
@@ -996,44 +1009,51 @@ class HospitalKMSApp:
 
     def _run_full_cycle(self):
         """Execute the entire 5-phase KMS life-cycle sequentially."""
-        if not self._check_data_loaded(auto_load=True):
-            return
+        self._set_status("Executing Full KMS Life-Cycle…")
 
-        def _cycle():
+        def _worker():
             try:
-                self.root.after(0, lambda: self._set_status("Step 1/5 — Data Loaded ✅"))
-                self.root.after(200, self._build_facts)
-                self.root.after(500, self._run_es_then_graph)
+                # 1. Load Data
+                self.root.after(0, lambda: self._set_status("Step 1/5: Loading hospital datasets…"))
+                if self._dataframes is None:
+                    dfs = load_all_data(self._data_dir)
+                    self._dataframes = dfs
+                    self.root.after(0, self._on_data_loaded)
+                else:
+                    dfs = self._dataframes
+
+                # 2. Build Facts
+                self.root.after(0, lambda: self._set_status("Step 2/5: Extracting knowledge base facts…"))
+                self.root.after(0, self._build_facts)
+
+                # 3. Run Expert System
+                self.root.after(0, lambda: self._set_status("Step 3/5: Reasoning with Expert System rules…"))
+                results = run_expert_system(dfs)
+                self._expert_results = results
+                self.root.after(0, lambda: self._on_es_completed(results))
+
+                # 4. Build Knowledge Graph
+                self.root.after(0, lambda: self._set_status("Step 4/5: Constructing Knowledge Graph…"))
+                G = build_knowledge_graph(dfs, results)
+                insights = get_graph_insights(G, results)
+                self._graph = G
+                self._graph_insights = insights
+                self.root.after(0, lambda: self._on_graph_built(G, insights))
+
+                # 5. Refresh Evaluation Dashboard
+                self.root.after(0, lambda: self._set_status("Step 5/5: Compiling evaluation dashboard…"))
+                self.root.after(0, self._refresh_eval)
+
+                def _finish():
+                    self._show_phase(4)
+                    self._set_status("🌟 Full KMS Life-Cycle completed successfully!")
+
+                self.root.after(0, _finish)
+
             except Exception:
                 self.root.after(0, lambda: self._show_error(traceback.format_exc()))
 
-        threading.Thread(target=_cycle, daemon=True).start()
-
-    def _run_es_then_graph(self):
-        if self._dataframes is None:
-            return
-        try:
-            results = run_expert_system(self._dataframes)
-            self._expert_results = results
-            self.root.after(0, lambda: self._on_es_completed(results))
-            self.root.after(300, self._run_graph_and_eval)
-        except Exception:
-            self.root.after(0, lambda: self._show_error(traceback.format_exc()))
-
-    def _run_graph_and_eval(self):
-        if self._expert_results is None or self._dataframes is None:
-            return
-        try:
-            G = build_knowledge_graph(self._dataframes, self._expert_results)
-            insights = get_graph_insights(G, self._expert_results)
-            self._graph = G
-            self._graph_insights = insights
-            self.root.after(0, lambda: self._on_graph_built(G, insights))
-            self.root.after(400, self._refresh_eval)
-            self.root.after(500, lambda: self._set_status("🌟 Full KMS Life-Cycle completed successfully!"))
-            self.root.after(600, lambda: self._show_phase(4))
-        except Exception:
-            self.root.after(0, lambda: self._show_error(traceback.format_exc()))
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _set_data_folder(self):
         folder = filedialog.askdirectory(title="Select folder containing CSV files")

@@ -285,18 +285,19 @@ def analyze_graph(graph: nx.DiGraph) -> dict:
     for u, v, data in graph.edges(data=True):
         if data.get("relation") == "TRIGGERED":
             dept_label = graph.nodes[u].get("label", u)
-            dept_conc[dept_label] += 1
+            occ = int(data.get("occurrences", 1))
+            dept_conc[dept_label] += occ
             sev = data.get("severity", "")
             if sev == "Critical":
-                dept_critical[dept_label] += 1
-                dept_vulnerability_index[dept_label] += 4
+                dept_critical[dept_label] += occ
+                dept_vulnerability_index[dept_label] += 4 * occ
             elif sev == "High":
-                dept_high[dept_label] += 1
-                dept_vulnerability_index[dept_label] += 3
+                dept_high[dept_label] += occ
+                dept_vulnerability_index[dept_label] += 3 * occ
             elif sev == "Medium":
-                dept_vulnerability_index[dept_label] += 2
+                dept_vulnerability_index[dept_label] += 2 * occ
             else:
-                dept_vulnerability_index[dept_label] += 1
+                dept_vulnerability_index[dept_label] += 1 * occ
 
     most_critical_dept = (
         max(dept_vulnerability_index, key=dept_vulnerability_index.get)
@@ -346,7 +347,7 @@ def get_graph_insights(graph: nx.DiGraph, expert_results: list[dict]) -> list[st
     # Department ranking
     ranked = sorted(analysis["dept_vulnerability_index"].items(), key=lambda x: x[1], reverse=True)
     if ranked:
-        rank_str = " > ".join(f"{d} ({v})" for d, v in ranked)
+        rank_str = " > ".join(f"{d} (Score: {v})" for d, v in ranked)
         insights.append(f"Department Risk Hierarchy: {rank_str}.")
 
     # Severity distribution
@@ -394,17 +395,18 @@ def draw_graph(graph: nx.DiGraph, ax, mode: str = "all") -> None:
         )
 
     # Edge rendering
-    edge_colors = []
-    for u, v, data in subG.edges(data=True):
-        sev = data.get("severity", "")
-        edge_colors.append(SEVERITY_COLORS.get(sev, "#4b5563"))
+    if subG.number_of_edges() > 0:
+        edge_colors = []
+        for u, v, data in subG.edges(data=True):
+            sev = data.get("severity", "")
+            edge_colors.append(SEVERITY_COLORS.get(sev, "#4b5563"))
 
-    nx.draw_networkx_edges(
-        subG, pos, edge_color=edge_colors,
-        arrows=True, arrowsize=14,
-        connectionstyle="arc3,rad=0.08",
-        alpha=0.75, ax=ax, width=1.4
-    )
+        nx.draw_networkx_edges(
+            subG, pos, edge_color=edge_colors,
+            arrows=True, arrowsize=14,
+            connectionstyle="arc3,rad=0.08",
+            alpha=0.75, ax=ax, width=1.4
+        )
 
     # Labels
     labels = {n: subG.nodes[n].get("label", n)[:16] for n in subG.nodes}
@@ -414,6 +416,7 @@ def draw_graph(graph: nx.DiGraph, ax, mode: str = "all") -> None:
         font_weight="bold", ax=ax
     )
 
+    ax.margins(0.12)
     ax.axis("off")
     ax.set_facecolor("#1a1a2e")
 
